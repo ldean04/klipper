@@ -7,6 +7,8 @@ import logging, math, bisect
 import mcu
 from . import ldc1612, probe, manual_probe
 
+OUT_OF_RANGE = 99.9
+
 # Tool for calibrating the sensor Z detection and applying that calibration
 class EddyCalibration:
     def __init__(self, config):
@@ -38,9 +40,9 @@ class EddyCalibration:
         for i, (samp_time, freq, dummy_z) in enumerate(samples):
             pos = bisect.bisect(self.cal_freqs, freq)
             if pos >= len(self.cal_zpos):
-                zpos = -99.9
+                zpos = -OUT_OF_RANGE
             elif pos == 0:
-                zpos = 99.9
+                zpos = OUT_OF_RANGE
             else:
                 # XXX - could further optimize and avoid div by zero
                 this_freq = self.cal_freqs[pos]
@@ -223,7 +225,7 @@ class EddyGatherSamples:
         # Find position since trigger
         msg_num = discard_msgs = 0
         samp_sum = 0.
-        samp_count = 0
+        samp_count = samp_bad_range = 0
         while msg_num < len(self._samples):
             msg = self._samples[msg_num]
             msg_num += 1
@@ -234,11 +236,17 @@ class EddyGatherSamples:
                 discard_msgs = msg_num
                 continue
             for time, freq, z in data:
+                if z <= -OUT_OF_RANGE or z >= OUT_OF_RANGE:
+                    samp_bad_range += 1
+                    continue
                 if time >= start_time and time <= end_time:
                     samp_sum += z
                     samp_count += 1
         del self._samples[:discard_msgs]
         if not samp_count:
+            if samp_bad_range:
+                raise self._printer.command_error(
+                    "probe_eddy_current sensor not in valid range")
             raise self._printer.command_error(
                 "Unable to obtain probe_eddy_current sensor readings")
         halt_z = samp_sum / samp_count
